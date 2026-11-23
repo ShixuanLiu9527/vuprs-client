@@ -1,0 +1,21 @@
+{
+    "config_version": 1,
+    "server": {
+        "host": "192.168.1.100",
+        "port": 8080,
+        "connect_timeout_ms": 3000,
+        "command_timeout_ms": 5000
+    },
+    "waveform": {
+        "history_seconds": 60,
+        "default_window_seconds": 10,
+        "queue_frames": 256
+    },
+    "recording": {
+        "directory": "recordings",
+        "queue_frames": 512
+    },
+    "heatmap": {
+        "resolution": 256
+    }
+}

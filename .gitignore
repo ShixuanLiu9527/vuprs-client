@@ -1,0 +1,6 @@
+build/
+build-*/
+recordings/
+*.vbf
+*.vbf.part
+*.user
