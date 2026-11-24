@@ -7,6 +7,7 @@
 #include "core/app_config.h"
 #include "core/beam_frame.h"
 #include "core/frame_queue.h"
+#include "core/parameter_limits.h"
 #include "core/waveform_buffer.h"
 
 class QCheckBox;
@@ -61,6 +62,7 @@ namespace vuprs
             void onStatusTimer();
 
             void onReadParameters();
+            void onValidateParameters();
             void onApplyParameters();
             void onApplyBeamformer();
             void onStart();
@@ -103,6 +105,9 @@ namespace vuprs
             QString recordingDirectoryPath() const;
             QString numberString(double value) const;
             void applyAlgorithmParameters(const QJsonObject &params);
+            void applyServerLimits();
+            void updateParameterMetrics();
+            void setSpinValueExpanding(QDoubleSpinBox *spin, double value, const QString &name);
             void applyConfig(const AppConfig &config);
             void stopRecording(const QString &reason, bool notify);
             void maybeFinishRecording();
@@ -119,6 +124,8 @@ namespace vuprs
             QString formatPlaybackTime(qint64 ms) const;
 
             AppConfig config_;
+            ServerLimits serverLimits_;
+            ParameterMetrics parameterMetrics_;
             ControlClient *client_ = nullptr;
             QThread *networkThread_ = nullptr;
             std::shared_ptr<RecordingWriter> recorder_;
@@ -178,7 +185,9 @@ namespace vuprs
             QDoubleSpinBox *snapshotWindowSpin_ = nullptr;
             QDoubleSpinBox *covarianceIndexSpin_ = nullptr;
             QPushButton *readParametersButton_ = nullptr;
+            QPushButton *validateParametersButton_ = nullptr;
             QPushButton *applyParametersButton_ = nullptr;
+            QLabel *constraintsLabel_ = nullptr;
 
             QComboBox *beamformerCombo_ = nullptr;
             QPushButton *applyBeamformerButton_ = nullptr;

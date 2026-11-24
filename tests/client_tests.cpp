@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <cmath>
 #include <QDir>
 #include <QHostAddress>
 #include <QJsonDocument>
@@ -13,6 +14,7 @@
 #include "core/beam_frame.h"
 #include "core/fibonacci.h"
 #include "core/frame_protocol.h"
+#include "core/parameter_limits.h"
 #include "core/waveform_buffer.h"
 #include "net/control_client.h"
 #include "record/recording_naming.h"
@@ -173,6 +175,58 @@ private slots:
         QCOMPARE(scan.dataPoints, 3u);
         QCOMPARE(scan.altMinDeg, 15.0);
         QCOMPARE(scan.values[2], 65535);
+    }
+
+    void serverLimitsAndDerivedMetrics()
+    {
+        const QJsonObject json{
+            {"min_fs", "10.0"},
+            {"max_fs", "120000.0"},
+            {"min_frequency", "10.0"},
+            {"max_frequency", "60000.0"},
+            {"fft_points", "512"},
+            {"dma_buffer_points", "8192"},
+            {"fir_length", "256"},
+            {"inference_frame_time_ms", "15.0"},
+            {"inference_enabled", "1"},
+            {"max_scan_points", "10000"},
+            {"max_wave_velocity", "8000.0"}};
+        const auto limits = vuprs::client::parseServerLimits(json);
+        QVERIFY(limits.fromServer);
+        QCOMPARE(limits.fftPoints, 512);
+        QCOMPARE(limits.dmaBufferPoints, 8192);
+        QCOMPARE(limits.firLength, 256);
+        QCOMPARE(limits.maxWaveVelocity, 8000.0);
+        QVERIFY(limits.inferenceEnabled);
+
+        const auto at_10k = vuprs::client::computeParameterMetrics(
+            limits, 10000.0, 500.0, 3000.0, 200.0, 256, 512);
+        QVERIFY(std::abs(at_10k.frequencyResolutionHz - 19.53125) < 1e-9);
+        QCOMPARE(at_10k.bandBinCount, 128);
+        QVERIFY(std::abs(at_10k.snapshotTimeSeconds - 10.24) < 1e-9);
+        QVERIFY(std::abs(at_10k.blockPeriodSeconds - 0.8192) < 1e-9);
+
+        const auto at_100k = vuprs::client::computeParameterMetrics(
+            limits, 100000.0, 500.0, 3000.0, 200.0, 256, 512);
+        QVERIFY(std::abs(at_100k.frequencyResolutionHz - 195.3125) < 1e-9);
+        QCOMPARE(at_100k.bandBinCount, 13);
+        QCOMPARE(at_100k.inferenceFrameSamples, 1500);
+        QVERIFY(!at_100k.inferenceBufferTooShort);
+        QVERIFY(std::abs(at_100k.snapshotTimeSeconds - 1.024) < 1e-9);
+        QVERIFY(std::abs(at_100k.blockPeriodSeconds - 0.08192) < 1e-9);
+        QVERIFY(std::abs(at_100k.receiveQueueSeconds - 20.97152) < 1e-9);
+        QVERIFY(std::abs(at_100k.recordingQueueSeconds - 41.94304) < 1e-9);
+
+        auto short_dma = limits;
+        short_dma.dmaBufferPoints = 1024;
+        const auto short_metrics = vuprs::client::computeParameterMetrics(
+            short_dma, 100000.0, 500.0, 3000.0, 200.0, 256, 512);
+        QVERIFY(short_metrics.inferenceBufferTooShort);
+
+        const auto defaults = vuprs::client::parseServerLimits(QJsonObject());
+        QVERIFY(!defaults.fromServer);
+        QCOMPARE(defaults.fftPoints, 512);
+        QCOMPARE(defaults.minSamplingFrequencyHz, 10.0);
     }
 
     void fibonacciGridCounts()

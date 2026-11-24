@@ -71,12 +71,13 @@ magic/version 错误, 未知类型, 方向错误, payload 超限时会关闭连�
 
 | 命令 | params | 说明 |
 | :--- | :--- | :--- |
-| `ack` | `{}` | 协议版本, 服务器版本, 能力 |
+| `ack` | `{}` | 协议版本, 服务器版本, 能力, 服务端限制 |
 | `start` | `{}` | 启动波束形成器 |
 | `stop` | `{}` | 停止波束形成器 |
 | `reset` | `{}` | 停止后按当前配置重启 |
 | `change_beamformer` | `{"beamformer":"mvdr"}` | `mvdr`, `cbf` 或 `dcrcb` |
 | `redirect` | `{"alt":"44.32","az":"-121.34"}` | 修改指向 |
+| `validate_config` | 部分字段 | 只检查参数, 不重启波束形成器 |
 | `change_algorithm_parameters` | 部分字段 | 修改并重启 |
 | `read_algorithm_parameters` | `{}` | 读取参数 |
 | `enable_scan` | `{"points":"70","alt_min":"15.0"}` | 开启扫描并推送扫描帧 |
@@ -84,6 +85,53 @@ magic/version 错误, 未知类型, 方向错误, payload 超限时会关闭连�
 | `get_status` | `{}` | 运行/连接/推理/扫描状态 |
 
 所有数值参数仍使用 JSON 字符串.
+
+`enable_scan` 的 `alt_min` 必须严格大于 10 度, 且不超过 90 度; 否则返回参数非法.
+
+### 4.1 服务端限制
+
+`ack` 的 `params.limits` 返回服务端能力, 客户端用它设置参数范围并计算派生指标:
+
+| 键 | 说明 |
+| :--- | :--- |
+| `min_fs` | 最小采样率, Hz |
+| `max_fs` | 最大采样率, Hz |
+| `min_frequency` | 通带下限/上限的最小值, Hz |
+| `max_frequency` | 通带频率的绝对上限, Hz |
+| `fft_points` | 波束形成使用的 FFT 点数 |
+| `dma_buffer_points` | 每个 DMA 数据块的采样数 |
+| `dma_buffer_count` | DMA 描述符数量 |
+| `fir_length` | FIR 滤波器抽头数 |
+| `inference_frame_time_ms` | 推理帧时长, 毫秒 |
+| `inference_enabled` | `1` 表示推理模型可用 |
+| `max_scan_points` | 扫描 `points (half)` 上限 |
+| `max_wave_velocity` | 声速上限, m/s |
+
+所有值均为 JSON 字符串. 未提供 `limits` 时, 客户端使用内置默认值.
+
+### 4.2 validate_config
+
+`validate_config` 接收与 `change_algorithm_parameters` 相同的部分字段, 只做检查, 不停止或重启波束形成器. 成功响应示例:
+
+```json
+{"ok":true,"cmd":"validate_config","error":0,"info":"","params":{
+  "frequency_resolution_hz":"195.312500",
+  "band_bins":"13",
+  "inference_frame_samples":"1500",
+  "dma_buffer_points":"8192",
+  "fir_length":"256",
+  "snapshot_time_seconds":"1.024000",
+  "block_period_seconds":"0.081920",
+  "warnings":"band covers only 13 FFT bins at df=195.312500 Hz; "
+}}
+```
+
+`warnings` 为空表示没有发现明显问题. 参数本身非法时返回 `ok = false`. 当前检查包括:
+
+- 基本范围: fs, 通带, 声速, 快照窗口, 协方差系数.
+- fs 是否被 ADC 控制器的 SCI 映射支持.
+- 通带内 FFT 频点数; 少于 16 个时给出警告.
+- DMA 缓冲是否至少能容纳一个推理帧.
 
 ## 5. BF_DATA
 

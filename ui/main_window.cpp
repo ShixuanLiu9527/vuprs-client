@@ -22,6 +22,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonDocument>
+#include <QJsonValue>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -39,6 +40,7 @@
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QStringList>
 #include <QTabWidget>
 #include <QThread>
 #include <QTimer>
@@ -108,6 +110,7 @@ vuprs::client::MainWindow::MainWindow(QWidget *parent)
     this->buildUi();
     this->recordDirectoryEdit_->setText(this->recordingDirectoryPath());
     this->updateRecordingUi();
+    this->updateParameterMetrics();
 
     this->waveformBuffer_.configure(10000.0, this->config_.historySeconds);
     this->waveformWidget_->setBuffer(&this->waveformBuffer_);
@@ -200,10 +203,10 @@ void vuprs::client::MainWindow::buildUi()
     /* Algorithm parameters */
     auto *algorithm_group = new QGroupBox(QStringLiteral("算法参数"));
     auto *algorithm_form = new QFormLayout(algorithm_group);
-    this->fsSpin_ = MakeDoubleSpin(1.0, 120000.0, 10000.0, 3, QStringLiteral(" Hz"));
-    this->waveVelocitySpin_ = MakeDoubleSpin(1.0, 2000.0, 346.0, 3, QStringLiteral(" m/s"));
-    this->lowerFrequencySpin_ = MakeDoubleSpin(0.1, 60000.0, 500.0, 3, QStringLiteral(" Hz"));
-    this->upperFrequencySpin_ = MakeDoubleSpin(0.1, 60000.0, 3000.0, 3, QStringLiteral(" Hz"));
+    this->fsSpin_ = MakeDoubleSpin(10.0, 120000.0, 10000.0, 3, QStringLiteral(" Hz"));
+    this->waveVelocitySpin_ = MakeDoubleSpin(1.0, 100000.0, 346.0, 3, QStringLiteral(" m/s"));
+    this->lowerFrequencySpin_ = MakeDoubleSpin(10.0, 60000.0, 500.0, 3, QStringLiteral(" Hz"));
+    this->upperFrequencySpin_ = MakeDoubleSpin(10.0, 60000.0, 3000.0, 3, QStringLiteral(" Hz"));
     this->snapshotWindowSpin_ = MakeDoubleSpin(1.0, 1000000.0, 200.0, 3);
     this->covarianceIndexSpin_ = MakeDoubleSpin(0.0, 0.999, 0.8, 3);
     algorithm_form->addRow(QStringLiteral("采样率 fs"), this->fsSpin_);
@@ -214,26 +217,37 @@ void vuprs::client::MainWindow::buildUi()
     algorithm_form->addRow(QStringLiteral("协方差平均"), this->covarianceIndexSpin_);
     auto *algorithm_buttons = new QHBoxLayout;
     this->readParametersButton_ = MakeButton(QStringLiteral("读取"));
+    this->validateParametersButton_ = MakeButton(QStringLiteral("检查"));
     this->applyParametersButton_ = MakeButton(QStringLiteral("应用"));
     algorithm_buttons->addWidget(this->readParametersButton_);
+    algorithm_buttons->addWidget(this->validateParametersButton_);
     algorithm_buttons->addWidget(this->applyParametersButton_);
     algorithm_form->addRow(algorithm_buttons);
     auto *parameter_warning = new QLabel(QStringLiteral("应用算法参数会重启波束形成器。"));
     parameter_warning->setWordWrap(true);
     algorithm_form->addRow(parameter_warning);
+    this->constraintsLabel_ = new QLabel;
+    this->constraintsLabel_->setWordWrap(true);
+    this->constraintsLabel_->setTextFormat(Qt::PlainText);
+    this->constraintsLabel_->setStyleSheet(QStringLiteral("color: #4a5560;"));
+    algorithm_form->addRow(this->constraintsLabel_);
     SetFieldToolTip(algorithm_form, this->fsSpin_,
-                    QStringLiteral("波束形成器采样率，单位 Hz。应用后服务器会重启算法；"
+                    QStringLiteral("波束形成器采样率，单位 Hz。范围由服务端能力决定；"
                                    "通带上限必须低于 fs/2。"));
     SetFieldToolTip(algorithm_form, this->waveVelocitySpin_,
-                    QStringLiteral("介质声速，单位 m/s，用于波束形成和空间扫描。"));
+                    QStringLiteral("介质声速，单位 m/s，用于波束形成和空间扫描。"
+                                   "上限由服务端能力决定。"));
     SetFieldToolTip(algorithm_form, this->lowerFrequencySpin_,
                     QStringLiteral("带通滤波下限，单位 Hz。要求 0 < 下限 < 上限 < fs/2。"));
     SetFieldToolTip(algorithm_form, this->upperFrequencySpin_,
                     QStringLiteral("带通滤波上限，单位 Hz。要求 0 < 下限 < 上限 < fs/2。"));
     SetFieldToolTip(algorithm_form, this->snapshotWindowSpin_,
-                    QStringLiteral("快照窗口大小，用于协方差估计；服务器按算法单位解释。"));
+                    QStringLiteral("协方差估计的等效快照数。实际收敛时间还取决于 fs 和快照周期。"));
     SetFieldToolTip(algorithm_form, this->covarianceIndexSpin_,
                     QStringLiteral("协方差矩阵平均系数，范围 [0, 1)。"));
+    this->validateParametersButton_->setToolTip(
+        QStringLiteral("请求服务端检查当前参数，不重启波束形成器；"
+                       "会返回频率分辨率、通带频点数和警告。"));
     left_layout->addWidget(algorithm_group);
 
     /* Beam control */
@@ -274,7 +288,7 @@ void vuprs::client::MainWindow::buildUi()
     this->scanPointsSpin_ = new QSpinBox;
     this->scanPointsSpin_->setRange(1, 10000);
     this->scanPointsSpin_->setValue(100);
-    this->scanAltMinSpin_ = MakeDoubleSpin(0.0, 90.0, 15.0, 2, QStringLiteral(" °"));
+    this->scanAltMinSpin_ = MakeDoubleSpin(10.01, 90.0, 15.0, 2, QStringLiteral(" °"));
     scan_form->addRow(QStringLiteral("points (half)"), this->scanPointsSpin_);
     scan_form->addRow(QStringLiteral("alt_min"), this->scanAltMinSpin_);
     auto *scan_buttons = new QHBoxLayout;
@@ -289,7 +303,7 @@ void vuprs::client::MainWindow::buildUi()
     SetFieldToolTip(scan_form, this->scanPointsSpin_,
                     QStringLiteral("斐波那契半球网格的 points(half) 参数，决定扫描点总数。"));
     SetFieldToolTip(scan_form, this->scanAltMinSpin_,
-                    QStringLiteral("扫描半球最低俯仰角，低于该角度的网格点不生成。"));
+                    QStringLiteral("扫描半球最低俯仰角，必须大于 10°；低于该角度的网格点不生成。"));
     left_layout->addWidget(scan_group);
 
     /* Recording */
@@ -433,7 +447,16 @@ void vuprs::client::MainWindow::buildUi()
     connect(this->connectButton_, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
     connect(this->mockButton_, &QPushButton::clicked, this, &MainWindow::onMockClicked);
     connect(this->readParametersButton_, &QPushButton::clicked, this, &MainWindow::onReadParameters);
+    connect(this->validateParametersButton_, &QPushButton::clicked, this, &MainWindow::onValidateParameters);
     connect(this->applyParametersButton_, &QPushButton::clicked, this, &MainWindow::onApplyParameters);
+    connect(this->fsSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) { this->updateParameterMetrics(); });
+    connect(this->lowerFrequencySpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) { this->updateParameterMetrics(); });
+    connect(this->upperFrequencySpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) { this->updateParameterMetrics(); });
+    connect(this->snapshotWindowSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) { this->updateParameterMetrics(); });
     connect(this->applyBeamformerButton_, &QPushButton::clicked, this, &MainWindow::onApplyBeamformer);
     connect(this->startButton_, &QPushButton::clicked, this, &MainWindow::onStart);
     connect(this->stopButton_, &QPushButton::clicked, this, &MainWindow::onStop);
@@ -653,12 +676,54 @@ void vuprs::client::MainWindow::onCommandFinished(quint32 requestId,
     if (!ok)
     {
         this->statusBar()->showMessage(QStringLiteral("%1 失败: %2").arg(cmd, info), 4000);
+        if (cmd == QStringLiteral("change_algorithm_parameters"))
+        {
+            this->logMessage(QStringLiteral("参数应用失败, 重新读取服务端参数"));
+            this->sendCommand(QStringLiteral("read_algorithm_parameters"));
+        }
+        else if (cmd == QStringLiteral("change_beamformer"))
+        {
+            this->sendCommand(QStringLiteral("get_status"));
+        }
         return;
     }
 
     if (cmd == QStringLiteral("read_algorithm_parameters"))
     {
         this->applyAlgorithmParameters(params);
+    }
+    else if (cmd == QStringLiteral("validate_config"))
+    {
+        const auto read_number = [&params](const char *key) -> double
+        {
+            const QJsonValue value = params.value(QString::fromLatin1(key));
+            if (value.isDouble())
+                return value.toDouble();
+            if (value.isString())
+            {
+                bool ok = false;
+                const double parsed = value.toString().toDouble(&ok);
+                return ok ? parsed : 0.0;
+            }
+            return 0.0;
+        };
+        const double df = read_number("frequency_resolution_hz");
+        const double bins = read_number("band_bins");
+        const double inference_samples = read_number("inference_frame_samples");
+        const QString warnings = params.value(QStringLiteral("warnings")).toString();
+        this->logMessage(QStringLiteral("参数检查: df=%1 Hz, 通带约 %2 个频点, 推理帧 %3 点")
+                             .arg(df, 0, 'f', 3)
+                             .arg(bins, 0, 'f', 0)
+                             .arg(inference_samples, 0, 'f', 0));
+        if (warnings.isEmpty())
+        {
+            this->statusBar()->showMessage(QStringLiteral("参数检查通过"), 5000);
+        }
+        else
+        {
+            this->logMessage(QStringLiteral("参数检查警告: ") + warnings);
+            this->statusBar()->showMessage(QStringLiteral("参数检查通过, 但有警告"), 5000);
+        }
     }
     else if (cmd == QStringLiteral("get_status"))
     {
@@ -676,7 +741,7 @@ void vuprs::client::MainWindow::onCommandFinished(quint32 requestId,
         bool scan_alt_ok = false;
         const double scan_alt = params.value(QStringLiteral("scan_alt_min")).toString().toDouble(&scan_alt_ok);
         if (scan_alt_ok)
-            this->scanAltMinSpin_->setValue(scan_alt);
+            this->setSpinValueExpanding(this->scanAltMinSpin_, scan_alt, QStringLiteral("alt_min"));
         if (!this->beamformerName_.isEmpty())
         {
             const int index = this->beamformerCombo_->findText(this->beamformerName_);
@@ -690,6 +755,25 @@ void vuprs::client::MainWindow::onCommandFinished(quint32 requestId,
         const QString protocol = params.value(QStringLiteral("protocol_version")).toString();
         const QString version = params.value(QStringLiteral("server_version")).toString();
         this->serverInfoLabel_->setText(QStringLiteral("服务器: %1  协议: %2").arg(version, protocol));
+        const QJsonObject limits = params.value(QStringLiteral("limits")).toObject();
+        if (!limits.isEmpty())
+        {
+            this->serverLimits_ = parseServerLimits(limits);
+            this->applyServerLimits();
+            this->logMessage(QStringLiteral("服务端能力: fs %1..%2 Hz, FFT %3 点, FIR %4, DMA %5 点, 最大扫描点 %6")
+                                 .arg(this->serverLimits_.minSamplingFrequencyHz, 0, 'f', 1)
+                                 .arg(this->serverLimits_.maxSamplingFrequencyHz, 0, 'f', 1)
+                                 .arg(this->serverLimits_.fftPoints)
+                                 .arg(this->serverLimits_.firLength)
+                                 .arg(this->serverLimits_.dmaBufferPoints)
+                                 .arg(this->serverLimits_.maxScanPoints));
+        }
+        else
+        {
+            this->serverLimits_ = ServerLimits();
+            this->applyServerLimits();
+            this->logMessage(QStringLiteral("服务端未提供能力限制, 使用默认参数范围"));
+        }
     }
 
     if (cmd == QStringLiteral("start") || cmd == QStringLiteral("stop") ||
@@ -789,23 +873,34 @@ void vuprs::client::MainWindow::onReadParameters()
     this->sendCommand(QStringLiteral("read_algorithm_parameters"));
 }
 
+void vuprs::client::MainWindow::onValidateParameters()
+{
+    this->sendCommand(QStringLiteral("validate_config"), this->algorithmParametersFromUi());
+}
+
 void vuprs::client::MainWindow::onApplyParameters()
 {
     const double fs = this->fsSpin_->value();
     const double lower = this->lowerFrequencySpin_->value();
     const double upper = this->upperFrequencySpin_->value();
-    if (fs <= 0.0 || fs > 120000.0)
+    if (!(fs >= this->serverLimits_.minSamplingFrequencyHz) ||
+        !(fs <= this->serverLimits_.maxSamplingFrequencyHz))
     {
-        this->logMessage(QStringLiteral("参数校验失败: fs 超出范围"));
+        this->logMessage(QStringLiteral("参数校验失败: fs 超出服务端范围 %1..%2 Hz")
+                             .arg(this->serverLimits_.minSamplingFrequencyHz)
+                             .arg(this->serverLimits_.maxSamplingFrequencyHz));
         return;
     }
-    if (lower <= 0.0 || upper <= 0.0 || lower >= upper || upper >= fs / 2.0)
+    if (!(lower >= this->serverLimits_.minFrequencyHz) ||
+        !(upper >= this->serverLimits_.minFrequencyHz) ||
+        lower >= upper || upper >= fs / 2.0)
     {
-        this->logMessage(QStringLiteral("参数校验失败: 需要 0 < lower < upper < fs/2"));
+        this->logMessage(QStringLiteral("参数校验失败: 需要 %1 <= lower < upper < fs/2")
+                             .arg(this->serverLimits_.minFrequencyHz));
         return;
     }
     if (this->waveVelocitySpin_->value() <= 0.0 ||
-        this->snapshotWindowSpin_->value() <= 0.0 ||
+        this->snapshotWindowSpin_->value() < 1.0 ||
         this->covarianceIndexSpin_->value() < 0.0 ||
         this->covarianceIndexSpin_->value() >= 1.0)
     {
@@ -850,9 +945,9 @@ void vuprs::client::MainWindow::onEnableScan()
 {
     const int points = this->scanPointsSpin_->value();
     const double alt_min = this->scanAltMinSpin_->value();
-    if (points <= 0 || points > 10000 || alt_min < 0.0 || alt_min > 90.0)
+    if (points <= 0 || points > 10000 || alt_min <= 10.0 || alt_min > 90.0)
     {
-        this->logMessage(QStringLiteral("扫描参数校验失败"));
+        this->logMessage(QStringLiteral("扫描参数校验失败: points 需在 1..10000, alt_min 必须大于 10°"));
         return;
     }
     QJsonObject params;
@@ -1580,6 +1675,7 @@ void vuprs::client::MainWindow::applyConfig(const AppConfig &config)
         this->logMessage(QStringLiteral("接收队列帧数/命令超时将在下次启动后生效"));
     }
     this->updateRecordingUi();
+    this->updateParameterMetrics();
 }
 
 void vuprs::client::MainWindow::onBeamDirectionPicked(double altDeg, double azDeg)
@@ -1640,6 +1736,7 @@ void vuprs::client::MainWindow::setConnectedUi(bool connected)
     this->mockButton_->setEnabled(!connected);
     const bool controls = connected;
     this->readParametersButton_->setEnabled(controls);
+    this->validateParametersButton_->setEnabled(controls);
     this->applyParametersButton_->setEnabled(controls);
     this->applyBeamformerButton_->setEnabled(controls);
     this->startButton_->setEnabled(controls);
@@ -1901,12 +1998,12 @@ void vuprs::client::MainWindow::applyAlgorithmParameters(const QJsonObject &para
     read_double(QStringLiteral("covariance_average_index"), &covariance);
 
     const double old_rate = this->waveformBuffer_.sampleRateHz();
-    this->fsSpin_->setValue(fs);
-    this->waveVelocitySpin_->setValue(velocity);
-    this->lowerFrequencySpin_->setValue(lower);
-    this->upperFrequencySpin_->setValue(upper);
-    this->snapshotWindowSpin_->setValue(snapshot);
-    this->covarianceIndexSpin_->setValue(covariance);
+    this->setSpinValueExpanding(this->fsSpin_, fs, QStringLiteral("fs"));
+    this->setSpinValueExpanding(this->waveVelocitySpin_, velocity, QStringLiteral("声速"));
+    this->setSpinValueExpanding(this->lowerFrequencySpin_, lower, QStringLiteral("通带下限"));
+    this->setSpinValueExpanding(this->upperFrequencySpin_, upper, QStringLiteral("通带上限"));
+    this->setSpinValueExpanding(this->snapshotWindowSpin_, snapshot, QStringLiteral("快照窗口"));
+    this->setSpinValueExpanding(this->covarianceIndexSpin_, covariance, QStringLiteral("协方差平均"));
     if (fs > 0.0)
     {
         this->waveformBuffer_.configure(fs, this->config_.historySeconds);
@@ -1917,4 +2014,140 @@ void vuprs::client::MainWindow::applyAlgorithmParameters(const QJsonObject &para
             this->logMessage(QStringLiteral("波形缓存已按采样率 %1 Hz 重新初始化").arg(fs, 0, 'f', 3));
         }
     }
+    this->updateParameterMetrics();
+}
+
+void vuprs::client::MainWindow::setSpinValueExpanding(QDoubleSpinBox *spin,
+                                                      double value,
+                                                      const QString &name)
+{
+    if (spin == nullptr || !std::isfinite(value))
+        return;
+    const double old_min = spin->minimum();
+    const double old_max = spin->maximum();
+    if (value < old_min || value > old_max)
+    {
+        spin->setRange(std::min(old_min, value), std::max(old_max, value));
+        this->logMessage(QStringLiteral("服务端参数 %1=%2 超出界面范围, 已扩展显示范围")
+                             .arg(name)
+                             .arg(value));
+    }
+    spin->setValue(value);
+}
+
+void vuprs::client::MainWindow::applyServerLimits()
+{
+    const ServerLimits &limits = this->serverLimits_;
+    const double fs_min = std::max(0.001, limits.minSamplingFrequencyHz);
+    const double fs_max = std::max(fs_min, limits.maxSamplingFrequencyHz);
+    const double frequency_min = std::max(0.001, limits.minFrequencyHz);
+    const double frequency_max = std::max(frequency_min, limits.maxFrequencyHz);
+
+    const double current_fs = this->fsSpin_->value();
+    this->fsSpin_->setRange(std::min(fs_min, current_fs), std::max(fs_max, current_fs));
+    if (current_fs < fs_min || current_fs > fs_max)
+    {
+        this->logMessage(QStringLiteral("当前 fs=%1 Hz 超出服务端范围 %2..%3 Hz")
+                             .arg(current_fs)
+                             .arg(fs_min)
+                             .arg(fs_max));
+    }
+
+    const double current_lower = this->lowerFrequencySpin_->value();
+    const double current_upper = this->upperFrequencySpin_->value();
+    this->lowerFrequencySpin_->setRange(std::min(frequency_min, current_lower),
+                                        std::max(frequency_max, current_lower));
+    this->upperFrequencySpin_->setRange(std::min(frequency_min, current_upper),
+                                        std::max(frequency_max, current_upper));
+
+    this->waveVelocitySpin_->setRange(
+        1.0, std::max(limits.maxWaveVelocity, this->waveVelocitySpin_->value()));
+    this->scanPointsSpin_->setRange(
+        1, std::max(limits.maxScanPoints, this->scanPointsSpin_->value()));
+
+    const QString limits_text =
+        QStringLiteral("服务端限制: fs %1..%2 Hz, 频率 >= %3 Hz, FFT %4 点, FIR %5, "
+                       "DMA %6 点, 最大扫描点 %7, 声速 <= %8 m/s")
+            .arg(fs_min, 0, 'f', 1)
+            .arg(fs_max, 0, 'f', 1)
+            .arg(frequency_min, 0, 'f', 1)
+            .arg(limits.fftPoints)
+            .arg(limits.firLength)
+            .arg(limits.dmaBufferPoints)
+            .arg(limits.maxScanPoints)
+            .arg(limits.maxWaveVelocity, 0, 'f', 0);
+    this->serverInfoLabel_->setToolTip(limits_text);
+    this->fsSpin_->setToolTip(QStringLiteral("%1 实际范围由服务端决定; 通带上限必须低于 fs/2.")
+                                  .arg(limits_text));
+    this->updateParameterMetrics();
+}
+
+void vuprs::client::MainWindow::updateParameterMetrics()
+{
+    if (this->constraintsLabel_ == nullptr)
+        return;
+
+    this->parameterMetrics_ = computeParameterMetrics(
+        this->serverLimits_,
+        this->fsSpin_->value(),
+        this->lowerFrequencySpin_->value(),
+        this->upperFrequencySpin_->value(),
+        this->snapshotWindowSpin_->value(),
+        this->config_.beamQueueFrames,
+        this->config_.recordingQueueFrames);
+
+    QStringList lines;
+    const ParameterMetrics &metrics = this->parameterMetrics_;
+    if (metrics.frequencyResolutionHz > 0.0)
+    {
+        QString band = QStringLiteral("df = %1 Hz, 通带约 %2 个频点")
+                           .arg(metrics.frequencyResolutionHz, 0, 'f', 2)
+                           .arg(metrics.bandBinCount);
+        if (metrics.bandBinCount < 8)
+            band += QStringLiteral(" (过少)");
+        else if (metrics.bandBinCount < 16)
+            band += QStringLiteral(" (偏少)");
+        lines << band;
+    }
+    if (metrics.blockPeriodSeconds > 0.0)
+    {
+        lines << QStringLiteral("快照约 %1 s, 数据块 %2 ms")
+                     .arg(metrics.snapshotTimeSeconds, 0, 'f', 3)
+                     .arg(metrics.blockPeriodSeconds * 1000.0, 0, 'f', 1);
+        lines << QStringLiteral("接收队列约 %1 s, 录制队列约 %2 s")
+                     .arg(metrics.receiveQueueSeconds, 0, 'f', 1)
+                     .arg(metrics.recordingQueueSeconds, 0, 'f', 1);
+    }
+    if (this->serverLimits_.fromServer)
+    {
+        lines << QStringLiteral("服务端: fs %1..%2, FFT %3, FIR %4, DMA %5")
+                     .arg(this->serverLimits_.minSamplingFrequencyHz, 0, 'f', 0)
+                     .arg(this->serverLimits_.maxSamplingFrequencyHz, 0, 'f', 0)
+                     .arg(this->serverLimits_.fftPoints)
+                     .arg(this->serverLimits_.firLength)
+                     .arg(this->serverLimits_.dmaBufferPoints);
+    }
+    else
+    {
+        lines << QStringLiteral("服务端能力未获取, 使用默认 FFT %1, FIR %2, DMA %3")
+                     .arg(this->serverLimits_.fftPoints)
+                     .arg(this->serverLimits_.firLength)
+                     .arg(this->serverLimits_.dmaBufferPoints);
+    }
+    if (this->serverLimits_.inferenceEnabled)
+    {
+        lines << QStringLiteral("推理帧 %1 点, DMA 缓冲 %2 点")
+                     .arg(metrics.inferenceFrameSamples)
+                     .arg(this->serverLimits_.dmaBufferPoints);
+    }
+    if (metrics.inferenceBufferTooShort)
+        lines << QStringLiteral("警告: DMA 缓冲小于一个推理帧, 推理不会启动");
+
+    this->constraintsLabel_->setText(lines.join(QLatin1Char('\n')));
+    if (metrics.inferenceBufferTooShort || (metrics.frequencyResolutionHz > 0.0 && metrics.bandBinCount < 8))
+        this->constraintsLabel_->setStyleSheet(QStringLiteral("color: #b00020;"));
+    else if (metrics.frequencyResolutionHz > 0.0 && metrics.bandBinCount < 16)
+        this->constraintsLabel_->setStyleSheet(QStringLiteral("color: #a15c00;"));
+    else
+        this->constraintsLabel_->setStyleSheet(QStringLiteral("color: #4a5560;"));
 }

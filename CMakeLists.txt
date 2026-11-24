@@ -14,6 +14,7 @@ add_library(vuprs_client_core STATIC
     core/fibonacci.cpp
     core/waveform_buffer.cpp
     core/app_config.cpp
+    core/parameter_limits.cpp
     net/control_client.cpp
     record/vbf_format.cpp
     record/vbf_reader.cpp
