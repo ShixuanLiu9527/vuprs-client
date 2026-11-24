@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# VUPRS 上位机构建脚本，适用于 Windows Git Bash / MSYS2。
+# Build script for the VUPRS client.
+# Run from Git Bash or MSYS2 Bash on Windows: ./build.sh
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,20 +16,20 @@ RUN_TESTS=1
 
 usage() {
     cat <<EOF
-用法: ./build.sh [选项]
+Usage: ./build.sh [options]
 
-选项:
-  --clean       删除构建目录后重新配置
-  --debug       使用 Debug 构建（默认 Release）
-  --no-tests    构建后不运行测试
-  -h, --help    显示帮助
+Options:
+  --clean       Remove the build directory before configuring
+  --debug       Build with Debug instead of Release
+  --no-tests    Do not run tests after the build
+  -h, --help    Show this help
 
-环境变量:
-  QT_ROOT       Qt mingw_64 目录（默认: $QT_ROOT）
-  MINGW_BIN     MinGW bin 目录（默认: $MINGW_BIN）
-  BUILD_DIR     构建目录（默认: $BUILD_DIR）
-  BUILD_TYPE    构建类型，Debug/Release（默认: $BUILD_TYPE）
-  JOBS          并行编译任务数（默认: $JOBS）
+Environment variables:
+  QT_ROOT       Qt mingw_64 directory (default: $QT_ROOT)
+  MINGW_BIN     MinGW bin directory (default: $MINGW_BIN)
+  BUILD_DIR     Build directory (default: $BUILD_DIR)
+  BUILD_TYPE    Build type, Debug or Release (default: $BUILD_TYPE)
+  JOBS          Parallel build jobs (default: $JOBS)
 EOF
 }
 
@@ -39,7 +40,7 @@ for arg in "$@"; do
         --no-tests) RUN_TESTS=0 ;;
         -h|--help) usage; exit 0 ;;
         *)
-            printf '未知参数: %s\n\n' "$arg" >&2
+            printf 'Unknown option: %s\n\n' "$arg" >&2
             usage >&2
             exit 2
             ;;
@@ -47,23 +48,23 @@ for arg in "$@"; do
 done
 
 command -v cmake >/dev/null 2>&1 || {
-    echo "未找到 cmake，请安装 CMake >= 3.16 并加入 PATH。" >&2
+    echo "cmake not found. Install CMake >= 3.16 and add it to PATH." >&2
     exit 1
 }
 
 if [[ ! -f "$QT_ROOT/lib/cmake/Qt6/Qt6Config.cmake" ]]; then
-    echo "未找到 Qt: $QT_ROOT" >&2
-    echo "请设置 QT_ROOT 指向 Qt 的 mingw_64 目录。" >&2
+    echo "Qt not found: $QT_ROOT" >&2
+    echo "Set QT_ROOT to the Qt mingw_64 directory." >&2
     exit 1
 fi
 
 if [[ ! -x "$MINGW_BIN/g++.exe" || ! -x "$MINGW_BIN/mingw32-make.exe" ]]; then
-    echo "未找到 MinGW: $MINGW_BIN" >&2
-    echo "请设置 MINGW_BIN 指向 Qt Tools/mingw1310_64/bin 目录。" >&2
+    echo "MinGW not found: $MINGW_BIN" >&2
+    echo "Set MINGW_BIN to the Qt Tools/mingw1310_64/bin directory." >&2
     exit 1
 fi
 
-# Git Bash 的 PATH 需要 POSIX 路径；CMake 参数使用 Windows 路径。
+# Git Bash needs POSIX paths for PATH; CMake arguments use Windows-style paths.
 to_posix() {
     if command -v cygpath >/dev/null 2>&1; then
         cygpath -u "$1"
@@ -88,7 +89,7 @@ ROOT_DIR_CMAKE="$(to_native "$ROOT_DIR")"
 BUILD_DIR_CMAKE="$(to_native "$BUILD_DIR")"
 
 if [[ $CLEAN -eq 1 ]]; then
-    echo "清理构建目录: $BUILD_DIR"
+    echo "Cleaning build directory: $BUILD_DIR"
     rm -rf "$BUILD_DIR"
 fi
 
@@ -105,5 +106,5 @@ if [[ $RUN_TESTS -eq 1 ]]; then
     ctest --test-dir "$BUILD_DIR_CMAKE" --output-on-failure
 fi
 
-printf '\n构建完成: %s/vuprs_client.exe\n' "$BUILD_DIR"
-printf '直接运行前请确保 Qt bin 在 PATH 中，或执行 windeployqt。\n'
+printf '\nBuild complete: %s/vuprs_client.exe\n' "$BUILD_DIR"
+printf 'Before launching directly, add Qt bin to PATH or run windeployqt.\n'
