@@ -14,6 +14,7 @@
 #include "core/beam_frame.h"
 #include "core/fibonacci.h"
 #include "core/frame_protocol.h"
+#include "core/inference_utils.h"
 #include "core/parameter_limits.h"
 #include "core/waveform_buffer.h"
 #include "net/control_client.h"
@@ -66,14 +67,22 @@ namespace
 
     QByteArray MakeBfPayload(quint32 sampleRateMilliHz, const QVector<qint32> &samples)
     {
-        QByteArray payload(32 + samples.size() * 4, Qt::Uninitialized);
+        QByteArray payload(32 + samples.size() * 4, '\0');
         PutU32(payload, 0, sampleRateMilliHz);
         PutU32(payload, 4, static_cast<quint32>(samples.size()));
         PutU32(payload, 8, 1);
-        PutU32(payload, 12, static_cast<quint32>(9));
-        PutU32(payload, 16, 1);
         for (int i = 0; i < samples.size(); i++)
             PutU32(payload, 32 + i * 4, static_cast<quint32>(samples[i]));
+        return payload;
+    }
+
+    QByteArray MakeInferencePayload(const QVector<qint32> &values)
+    {
+        QByteArray payload(32 + values.size() * 4, '\0');
+        PutU32(payload, 0, static_cast<quint32>(values.size()));
+        PutU32(payload, 4, 1);
+        for (int i = 0; i < values.size(); i++)
+            PutU32(payload, 32 + i * 4, static_cast<quint32>(values[i]));
         return payload;
     }
 
@@ -162,8 +171,8 @@ private slots:
         QCOMPARE(beam.samples.size(), 4);
         QCOMPARE(beam.samples[0], 65536);
         QCOMPARE(beam.samples[1], -65536);
-        QCOMPARE(beam.inferenceIdentity, 9);
-        QVERIFY(beam.inferenceValid);
+        QCOMPARE(beam.inferenceIdentity, -1);
+        QVERIFY(!beam.inferenceValid);
 
         const QVector<quint16> values = {0, 32768, 65535};
         const QByteArray scan_payload = MakeScanPayload(70, values);
@@ -175,6 +184,17 @@ private slots:
         QCOMPARE(scan.dataPoints, 3u);
         QCOMPARE(scan.altMinDeg, 15.0);
         QCOMPARE(scan.values[2], 65535);
+
+        const QVector<qint32> tensor = {1, -2, 3, 4};
+        const QByteArray inference_payload = MakeInferencePayload(tensor);
+        const QByteArray inference_frame = MakeFrame(vuprs::client::MessageType::InferenceData,
+                                                     0, 9, 456, inference_payload);
+        QVERIFY(vuprs::client::decodeFrameHeader(inference_frame.left(40), &header, &error));
+        vuprs::client::InferenceFrame inference;
+        QVERIFY(vuprs::client::parseInferenceFrame(header, inference_frame.mid(40), &inference, &error));
+        QCOMPARE(inference.sequence, 9u);
+        QCOMPARE(inference.values, tensor);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
     }
 
     void serverLimitsAndDerivedMetrics()
@@ -227,6 +247,25 @@ private slots:
         QVERIFY(!defaults.fromServer);
         QCOMPARE(defaults.fftPoints, 512);
         QCOMPARE(defaults.minSamplingFrequencyHz, 10.0);
+    }
+
+    void inferenceNormalization()
+    {
+        const QVector<qint32> values = {-1, 0, 1};
+        const QVector<double> percent = vuprs::client::normalizeInferencePercent(values);
+        QCOMPARE(percent.size(), 3);
+        QVERIFY(std::abs(percent.at(0) - 0.0) < 1e-9);
+        QVERIFY(std::abs(percent.at(1) - 50.0) < 1e-9);
+        QVERIFY(std::abs(percent.at(2) - 100.0) < 1e-9);
+        QCOMPARE(vuprs::client::inferenceArgMax(values), 2);
+
+        const QVector<double> flat = vuprs::client::normalizeInferencePercent({5, 5});
+        QCOMPARE(flat, QVector<double>({0.0, 0.0}));
+
+        const QVector<double> single = vuprs::client::normalizeInferencePercent({5});
+        QCOMPARE(single, QVector<double>({100.0}));
+        QCOMPARE(vuprs::client::inferenceArgMax({}), -1);
+        QVERIFY(std::abs(vuprs::client::inferenceQ31ToDouble(0x40000000) - 0.5) < 1e-9);
     }
 
     void fibonacciGridCounts()
@@ -522,8 +561,9 @@ private slots:
 
         auto beam_queue = std::make_shared<vuprs::client::FrameQueue<vuprs::client::BeamFrame>>(8);
         auto scan_queue = std::make_shared<vuprs::client::FrameQueue<vuprs::client::ScanFrame>>(8);
+        auto inference_queue = std::make_shared<vuprs::client::FrameQueue<vuprs::client::InferenceFrame>>(8);
         QThread thread;
-        auto *client = new vuprs::client::ControlClient(beam_queue, scan_queue, 1000);
+        auto *client = new vuprs::client::ControlClient(beam_queue, scan_queue, inference_queue, 1000);
         client->moveToThread(&thread);
         QObject::connect(&thread, &QThread::started, client, &vuprs::client::ControlClient::initialize);
         QSignalSpy responses(client, &vuprs::client::ControlClient::commandFinished);
@@ -557,8 +597,6 @@ private slots:
         vuprs::client::BfDataHeader data;
         data.sampleRateMilliHz = 10000000;
         data.sampleCount = 2;
-        data.inferenceIdentity = 3;
-        data.inferenceValid = 1;
         auto samples = std::make_shared<QVector<qint32>>();
         samples->append(65536);
         samples->append(-65536);
@@ -569,7 +607,17 @@ private slots:
         QVERIFY(beam_queue->tryPop(&received));
         QCOMPARE(received.sequence, 1u);
         QCOMPARE(received.samples.size(), 2);
-        QCOMPARE(received.inferenceIdentity, 9);
+        QCOMPARE(received.inferenceIdentity, -1);
+        QVERIFY(!received.inferenceValid);
+
+        const QVector<qint32> tensor = {10, 20, 30};
+        peer->write(MakeFrame(vuprs::client::MessageType::InferenceData, 0, 2, 456,
+                              MakeInferencePayload(tensor)));
+        QTRY_VERIFY_WITH_TIMEOUT(inference_queue->size() >= 1, 3000);
+        vuprs::client::InferenceFrame inference_received;
+        QVERIFY(inference_queue->tryPop(&inference_received));
+        QCOMPARE(inference_received.sequence, 2u);
+        QCOMPARE(inference_received.values, tensor);
 
         server.close();
     }

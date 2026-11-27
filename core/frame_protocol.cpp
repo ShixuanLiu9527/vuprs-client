@@ -59,6 +59,7 @@ namespace
         case vuprs::client::MessageType::ControlResponse:
         case vuprs::client::MessageType::BfData:
         case vuprs::client::MessageType::ScanData:
+        case vuprs::client::MessageType::InferenceData:
             return true;
         default:
             return false;
@@ -84,6 +85,8 @@ QString vuprs::client::messageTypeName(MessageType type)
         return "bf_data";
     case MessageType::ScanData:
         return "scan_data";
+    case MessageType::InferenceData:
+        return "inference_data";
     default:
         return "unknown";
     }
@@ -165,8 +168,6 @@ bool vuprs::client::parseBfFrame(const FrameHeader &header,
     data.sampleRateMilliHz = GetU32(payload, 0);
     data.sampleCount = GetU32(payload, 4);
     data.sampleFormat = GetU32(payload, 8);
-    data.inferenceIdentity = static_cast<qint32>(GetU32(payload, 12));
-    data.inferenceValid = GetU32(payload, 16);
     if (data.sampleFormat != 1)
     {
         SetError(error, QStringLiteral("不支持的 BF 量化格式"));
@@ -181,11 +182,54 @@ bool vuprs::client::parseBfFrame(const FrameHeader &header,
     frame->sequence = header.sequence;
     frame->timestampNs = header.timestampNs;
     frame->sampleRateMilliHz = data.sampleRateMilliHz;
-    frame->inferenceIdentity = data.inferenceIdentity;
-    frame->inferenceValid = data.inferenceValid != 0;
+    /* Inference results moved to INFERENCE_DATA. */
+    frame->inferenceIdentity = -1;
+    frame->inferenceValid = false;
     frame->samples.resize(static_cast<int>(data.sampleCount));
     for (quint32 i = 0; i < data.sampleCount; i++)
         frame->samples[static_cast<int>(i)] = static_cast<qint32>(GetU32(payload, DATA_HEADER_SIZE + static_cast<int>(i) * 4));
+    frame->arrivalMs = QDateTime::currentMSecsSinceEpoch();
+    return true;
+}
+
+bool vuprs::client::parseInferenceFrame(const FrameHeader &header,
+                                        const QByteArray &payload,
+                                        InferenceFrame *frame,
+                                        QString *error)
+{
+    if (frame == nullptr || header.type != MessageType::InferenceData)
+    {
+        SetError(error, QStringLiteral("不是推理帧"));
+        return false;
+    }
+    if (payload.size() < DATA_HEADER_SIZE)
+    {
+        SetError(error, QStringLiteral("推理数据头长度不足"));
+        return false;
+    }
+    InferenceDataHeader data;
+    data.tensorLength = GetU32(payload, 0);
+    data.dataFormat = GetU32(payload, 4);
+    if (data.dataFormat != 1)
+    {
+        SetError(error, QStringLiteral("不支持的推理量化格式"));
+        return false;
+    }
+    const quint64 expected = static_cast<quint64>(DATA_HEADER_SIZE) +
+                             static_cast<quint64>(data.tensorLength) * 4ULL;
+    if (expected != static_cast<quint64>(payload.size()))
+    {
+        SetError(error, QStringLiteral("推理 tensor 长度与 payload 不匹配"));
+        return false;
+    }
+    frame->sequence = header.sequence;
+    frame->timestampNs = header.timestampNs;
+    frame->values.resize(static_cast<int>(data.tensorLength));
+    for (quint32 i = 0; i < data.tensorLength; i++)
+    {
+        frame->values[static_cast<int>(i)] =
+            static_cast<qint32>(GetU32(payload, DATA_HEADER_SIZE + static_cast<int>(i) * 4));
+    }
     frame->arrivalMs = QDateTime::currentMSecsSinceEpoch();
     return true;
 }

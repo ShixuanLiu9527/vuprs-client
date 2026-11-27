@@ -15,6 +15,7 @@ add_library(vuprs_client_core STATIC
     core/waveform_buffer.cpp
     core/app_config.cpp
     core/parameter_limits.cpp
+    core/inference_utils.cpp
     net/control_client.cpp
     record/vbf_format.cpp
     record/vbf_reader.cpp
@@ -35,6 +36,7 @@ add_executable(vuprs_client
     ui/time_range_dialog.cpp
     ui/waveform_widget.cpp
     ui/hemisphere_widget.cpp
+    ui/inference_bar_widget.cpp
 )
 target_link_libraries(vuprs_client PRIVATE vuprs_client_core Qt6::Widgets)
 if(WIN32)

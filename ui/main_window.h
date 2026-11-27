@@ -31,6 +31,7 @@ namespace vuprs
         class RecordingWriter;
         class WaveformWidget;
         class HemisphereWidget;
+        class InferenceBarWidget;
 
         class MainWindow : public QMainWindow
         {
@@ -105,6 +106,7 @@ namespace vuprs
             QString recordingDirectoryPath() const;
             QString numberString(double value) const;
             void applyAlgorithmParameters(const QJsonObject &params);
+            void applyInferenceMetadata(const QJsonObject &params);
             void applyServerLimits();
             void updateParameterMetrics();
             void setSpinValueExpanding(QDoubleSpinBox *spin, double value, const QString &name);
@@ -131,6 +133,7 @@ namespace vuprs
             std::shared_ptr<RecordingWriter> recorder_;
             std::shared_ptr<FrameQueue<BeamFrame>> beamQueue_;
             std::shared_ptr<FrameQueue<ScanFrame>> scanQueue_;
+            std::shared_ptr<FrameQueue<InferenceFrame>> inferenceQueue_;
 
             WaveformBuffer waveformBuffer_;
             WaveformBuffer playbackBuffer_;
@@ -166,6 +169,11 @@ namespace vuprs
             ScanFrame latestScan_;
             bool hasScan_ = false;
             qint64 lastHeatmapUpdateMs_ = 0;
+            InferenceFrame latestInference_;
+            bool hasInference_ = false;
+            qint64 lastInferenceSequence_ = -1;
+            int inferenceTensorLength_ = 0;
+            int lastInferenceWarnLength_ = -1;
 
             QTimer *dataTimer_ = nullptr;
             QTimer *statusTimer_ = nullptr;
@@ -228,6 +236,7 @@ namespace vuprs
             QLabel *playbackTimeLabel_ = nullptr;
             WaveformWidget *waveformWidget_ = nullptr;
             HemisphereWidget *hemisphereWidget_ = nullptr;
+            InferenceBarWidget *inferenceBarWidget_ = nullptr;
             QPlainTextEdit *logView_ = nullptr;
             QTabWidget *tabs_ = nullptr;
         };

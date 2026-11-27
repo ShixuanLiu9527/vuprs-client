@@ -27,6 +27,7 @@ namespace vuprs
         public:
             ControlClient(std::shared_ptr<FrameQueue<BeamFrame>> beamQueue,
                           std::shared_ptr<FrameQueue<ScanFrame>> scanQueue,
+                          std::shared_ptr<FrameQueue<InferenceFrame>> inferenceQueue,
                           int commandTimeoutMs = 5000,
                           QObject *parent = nullptr);
             ~ControlClient() override;
@@ -41,6 +42,7 @@ namespace vuprs
 
             std::shared_ptr<FrameQueue<BeamFrame>> beamQueue() const { return this->beamQueue_; }
             std::shared_ptr<FrameQueue<ScanFrame>> scanQueue() const { return this->scanQueue_; }
+            std::shared_ptr<FrameQueue<InferenceFrame>> inferenceQueue() const { return this->inferenceQueue_; }
             quint64 receivedBytes() const { return this->receivedBytes_.load(); }
             quint64 sentBytes() const { return this->sentBytes_.load(); }
             bool isConnected() const { return this->connected_.load(); }
@@ -82,6 +84,7 @@ namespace vuprs
 
             std::shared_ptr<FrameQueue<BeamFrame>> beamQueue_;
             std::shared_ptr<FrameQueue<ScanFrame>> scanQueue_;
+            std::shared_ptr<FrameQueue<InferenceFrame>> inferenceQueue_;
             std::unique_ptr<FrameParser> parser_;
 
             QTcpSocket *socket_ = nullptr;

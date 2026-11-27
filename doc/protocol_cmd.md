@@ -10,7 +10,7 @@
 - TCP 单端口, 默认 `8080`.
 - 同时只维护一个客户端; 新连接替换旧连接.
 - 每帧 = 40 字节固定头 + `payload_bytes` 字节 payload.
-- 客户端发送控制请求; 服务端返回控制响应并主动推送 BF/扫描数据.
+- 客户端发送控制请求; 服务端返回控制响应并主动推送 BF/扫描/推理数据.
 - 不再有 `get_bf/get_scan` 轮询.
 - 控制响应优先于数据帧发送; 同一时刻只有一个写者, 帧不会穿插.
 
@@ -38,6 +38,7 @@
 | `0x0002` | `CONTROL_RESPONSE` | 服务端 -> 客户端 | JSON |
 | `0x0003` | `BF_DATA` | 服务端 -> 客户端 | 二进制 |
 | `0x0004` | `SCAN_DATA` | 服务端 -> 客户端 | 二进制 |
+| `0x0005` | `INFERENCE_DATA` | 服务端 -> 客户端 | 二进制 |
 
 magic/version 错误, 未知类型, 方向错误, payload 超限时会关闭连接.
 
@@ -71,7 +72,7 @@ magic/version 错误, 未知类型, 方向错误, payload 超限时会关闭连�
 
 | 命令 | params | 说明 |
 | :--- | :--- | :--- |
-| `ack` | `{}` | 协议版本, 服务器版本, 能力, 服务端限制 |
+| `ack` | `{}` | 协议版本, 服务器版本, 能力, 服务端限制, 推理 tensor 长度 |
 | `start` | `{}` | 启动波束形成器 |
 | `stop` | `{}` | 停止波束形成器 |
 | `reset` | `{}` | 停止后按当前配置重启 |
@@ -82,9 +83,11 @@ magic/version 错误, 未知类型, 方向错误, payload 超限时会关闭连�
 | `read_algorithm_parameters` | `{}` | 读取参数 |
 | `enable_scan` | `{"points":"70","alt_min":"15.0"}` | 开启扫描并推送扫描帧 |
 | `disable_scan` | `{}` | 关闭扫描 |
-| `get_status` | `{}` | 运行/连接/推理/扫描状态 |
+| `get_status` | `{}` | 运行/连接/推理/扫描状态, 推理 tensor 长度 |
 
 所有数值参数仍使用 JSON 字符串.
+
+`ack` 和 `get_status` 的 `params` 返回 `inference_tensor_length` (元素个数, 未就绪为 `0`) 和 `inference_format` (`"q31"`). 客户端应在接收推理数据前查询该长度.
 
 `enable_scan` 的 `alt_min` 必须严格大于 10 度, 且不超过 90 度; 否则返回参数非法.
 
@@ -142,12 +145,10 @@ payload 前 32 字节为数据头, 随后是 `sample_count` 个 little-endian `i
 | 0 | 4 | `sample_rate_millihz`, 即 Hz * 1000 |
 | 4 | 4 | `sample_count` |
 | 8 | 4 | `sample_format`, `1 = int32 Q16.16` |
-| 12 | 4 | `inference_identity`, int32, -1 表示无效 |
-| 16 | 4 | `inference_valid`, 0 或 1 |
-| 20 | 12 | reserved |
+| 12 | 20 | reserved |
 
 - `sequence` 每个 BF 帧递增, 客户端据此检测丢帧.
-- 故障类别直接从 BF 头读取, 不再有独立故障流.
+- 推理结果不再放在 BF 头中, 由 `INFERENCE_DATA` 独立推送.
 - 服务端在波束形成器运行且数据客户端存在时推送.
 
 ## 6. SCAN_DATA
@@ -173,7 +174,24 @@ power_dB = min_power_mdb/1000 + (raw / 65535.0) * (max_power_mdb - min_power_mdb
 
 扫描帧只在 `enable_scan` 后推送; `disable_scan` 后停止.
 
-## 7. 发送与背压
+## 7. INFERENCE_DATA
+
+payload 前 32 字节为数据头, 随后是 `tensor_length` 个 little-endian `int32` Q31 元素:
+
+| 偏移 | 大小 | 字段 |
+| ---: | ---: | :--- |
+| 0 | 4 | `tensor_length`, 元素个数 |
+| 4 | 4 | `data_format`, `1 = int32 Q31` |
+| 8 | 24 | reserved |
+
+- 推理 tensor 的 Q31 原始值按 `int32 / 2^31` 解码, 范围约 `[-1.0, 1.0)`.
+- 服务端先将模型输出按 `max(abs(tensor))` 归一化再转 Q31; 客户端柱状图再按当前 tensor 做 min-max 归一化到 `0..100%`.
+- 每个推理帧的 `tensor_length` 应等于 `ack` / `get_status` 返回的 `inference_tensor_length`.
+- `sequence` 每个推理帧递增, 客户端据此检测丢帧.
+- 服务端在推理可用, 波束形成器运行且数据客户端存在时推送, 频率不超过 `INFERENCE_MAX_RATE_HZ` (当前 10 Hz).
+- 推理数据独立于空间扫描; 即使未开启扫描, 推理帧仍可能推送.
+
+## 8. 发送与背压
 
 - 单连接单写者; 控制响应优先, 数据帧其次.
 - 数据队列默认 64 帧; 满时丢最旧帧, 客户端通过 `sequence` 缺口检测.
@@ -182,10 +200,11 @@ power_dB = min_power_mdb/1000 + (raw / 65535.0) * (max_power_mdb - min_power_mdb
 - `get_status` 返回运行状态, 连接状态, 推理是否可用等; 队列深度/丢帧统计可按需扩展.
 - 控制命令在独立 worker 线程串行执行, `start/stop` 不会阻塞网络读写.
 
-## 8. 客户端实现位置
+## 9. 客户端实现位置
 
 ```text
-core/frame_protocol.h/.cpp     固定帧头, 控制响应, BF/扫描帧解析
+core/frame_protocol.h/.cpp     固定帧头, 控制响应, BF/扫描/推理帧解析
+core/inference_utils.h/.cpp    推理 tensor 归一化与 argmax
 core/fibonacci.h/.cpp          与服务器一致的半球斐波那契网格
 core/waveform_buffer.h/.cpp    波形环形缓冲
 net/control_client.h/.cpp      QTcpSocket, 命令队列, 数据接收
@@ -198,11 +217,12 @@ record/recording_writer.h/.cpp 录制线程
 ui/settings_dialog.h/.cpp      设置对话框
 ui/waveform_widget.h/.cpp      波形控件
 ui/hemisphere_widget.h/.cpp    半球热力图控件
+ui/inference_bar_widget.h/.cpp 推理结果柱状图
 main.cpp                       程序入口
 tests/client_tests.cpp         单元测试
 ```
 
-## 9. 构建与联调
+## 10. 构建与联调
 
 ```bash
 ./build.sh

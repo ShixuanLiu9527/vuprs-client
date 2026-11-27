@@ -8,11 +8,13 @@
 
 vuprs::client::ControlClient::ControlClient(std::shared_ptr<FrameQueue<BeamFrame>> beamQueue,
                                              std::shared_ptr<FrameQueue<ScanFrame>> scanQueue,
+                                             std::shared_ptr<FrameQueue<InferenceFrame>> inferenceQueue,
                                              int commandTimeoutMs,
                                              QObject *parent)
     : QObject(parent),
       beamQueue_(std::move(beamQueue)),
       scanQueue_(std::move(scanQueue)),
+      inferenceQueue_(std::move(inferenceQueue)),
       commandTimeoutMs_(commandTimeoutMs)
 {
     this->parser_ = std::make_unique<FrameParser>(
@@ -116,6 +118,7 @@ void vuprs::client::ControlClient::doConnect(const QString &host, quint16 port, 
     this->initialize();
     this->beamQueue_->clear();
     this->scanQueue_->clear();
+    this->inferenceQueue_->clear();
     this->parser_->reset();
     this->commandQueue_.clear();
     this->busy_ = false;
@@ -281,6 +284,16 @@ void vuprs::client::ControlClient::onFrame(const FrameHeader &header, const QByt
             return;
         }
         this->scanQueue_->push(frame);
+    }
+    else if (header.type == MessageType::InferenceData)
+    {
+        InferenceFrame frame;
+        if (!parseInferenceFrame(header, payload, &frame, &error))
+        {
+            this->abortWithError(error);
+            return;
+        }
+        this->inferenceQueue_->push(frame);
     }
     else
     {

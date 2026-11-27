@@ -15,6 +15,7 @@ namespace vuprs
             quint32 sequence = 0;
             quint64 timestampNs = 0;
             quint32 sampleRateMilliHz = 0;
+            /* Legacy .vbf fields. BF_DATA no longer carries inference results. */
             qint32 inferenceIdentity = -1;
             bool inferenceValid = false;
             QVector<qint32> samples; /* raw Q16.16 */
@@ -22,6 +23,16 @@ namespace vuprs
 
             double sampleRateHz() const { return static_cast<double>(this->sampleRateMilliHz) / 1000.0; }
             int sampleCount() const { return this->samples.size(); }
+        };
+
+        struct InferenceFrame
+        {
+            quint64 sequence = 0;
+            quint64 timestampNs = 0;
+            QVector<qint32> values; /* raw Q31 tensor, value = raw / 2^31 */
+            qint64 arrivalMs = 0;
+
+            bool empty() const { return this->values.isEmpty(); }
         };
 
         struct ScanFrame
@@ -53,6 +64,7 @@ namespace vuprs
 }
 
 Q_DECLARE_METATYPE(vuprs::client::BeamFrame)
+Q_DECLARE_METATYPE(vuprs::client::InferenceFrame)
 Q_DECLARE_METATYPE(vuprs::client::ScanFrame)
 
 #endif

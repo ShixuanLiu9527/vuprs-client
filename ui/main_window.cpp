@@ -45,12 +45,14 @@
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
+#include "core/inference_utils.h"
 #include "net/control_client.h"
 #include "record/recording_naming.h"
 #include "record/recording_writer.h"
 #include "record/vbf_csv.h"
 #include "record/vbf_reader.h"
 #include "ui/hemisphere_widget.h"
+#include "ui/inference_bar_widget.h"
 #include "ui/settings_dialog.h"
 #include "ui/time_range_dialog.h"
 #include "ui/waveform_widget.h"
@@ -98,6 +100,7 @@ vuprs::client::MainWindow::MainWindow(QWidget *parent)
 
     this->beamQueue_ = std::make_shared<FrameQueue<BeamFrame>>(this->config_.beamQueueFrames);
     this->scanQueue_ = std::make_shared<FrameQueue<ScanFrame>>(32);
+    this->inferenceQueue_ = std::make_shared<FrameQueue<InferenceFrame>>(16);
     this->recorder_ = std::make_shared<RecordingWriter>();
     this->recorder_->setErrorCallback([this](const QString &error)
                                       {
@@ -420,8 +423,16 @@ void vuprs::client::MainWindow::buildUi()
     auto *heat_page = new QWidget;
     auto *heat_layout = new QVBoxLayout(heat_page);
     this->hemisphereWidget_ = new HemisphereWidget;
-    heat_layout->addWidget(this->hemisphereWidget_, 1);
-    auto *heat_hint = new QLabel(QStringLiteral("鼠标悬停查看 alt/az/dB；双击热力图可将位置填入波束指向。"));
+    heat_layout->addWidget(this->hemisphereWidget_, 3);
+    this->inferenceBarWidget_ = new InferenceBarWidget;
+    auto *inference_scroll = new QScrollArea;
+    inference_scroll->setWidgetResizable(true);
+    inference_scroll->setMinimumHeight(180);
+    inference_scroll->setMaximumHeight(230);
+    inference_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    inference_scroll->setWidget(this->inferenceBarWidget_);
+    heat_layout->addWidget(inference_scroll, 1);
+    auto *heat_hint = new QLabel(QStringLiteral("鼠标悬停查看 alt/az/dB；双击热力图可将位置填入波束指向。下方为推理 tensor 的 0-100% 柱状图。"));
     heat_hint->setWordWrap(true);
     heat_layout->addWidget(heat_hint);
     this->tabs_->addTab(heat_page, QStringLiteral("半球能量"));
@@ -518,7 +529,8 @@ void vuprs::client::MainWindow::buildUi()
 void vuprs::client::MainWindow::setupNetwork()
 {
     this->networkThread_ = new QThread(this);
-    this->client_ = new ControlClient(this->beamQueue_, this->scanQueue_, this->config_.commandTimeoutMs);
+    this->client_ = new ControlClient(this->beamQueue_, this->scanQueue_, this->inferenceQueue_,
+                                      this->config_.commandTimeoutMs);
     this->client_->setRecorder(this->recorder_);
     this->client_->moveToThread(this->networkThread_);
 
@@ -652,6 +664,17 @@ void vuprs::client::MainWindow::onConnectionChanged(bool connected, const QStrin
         this->scanEnabled_ = false;
         this->faultValid_ = false;
         this->faultIdentity_ = -1;
+        this->latestInference_ = InferenceFrame();
+        this->hasInference_ = false;
+        this->lastInferenceSequence_ = -1;
+        this->inferenceTensorLength_ = 0;
+        if (this->inferenceQueue_ != nullptr)
+            this->inferenceQueue_->clear();
+        if (this->inferenceBarWidget_ != nullptr)
+        {
+            this->inferenceBarWidget_->clear();
+            this->inferenceBarWidget_->setExpectedLength(0);
+        }
         if (this->recordingUi_)
             this->stopRecording(QStringLiteral("连接断开"), false);
         this->updateStatusLabels();
@@ -733,6 +756,7 @@ void vuprs::client::MainWindow::onCommandFinished(quint32 requestId,
         this->deviceRunning_ = running == QStringLiteral("1");
         this->inferenceReady_ = inference == QStringLiteral("1");
         this->scanEnabled_ = scan == QStringLiteral("1");
+        this->applyInferenceMetadata(params);
         this->beamformerName_ = params.value(QStringLiteral("beamformer")).toString();
         bool scan_points_ok = false;
         const int scan_points = params.value(QStringLiteral("scan_points")).toString().toInt(&scan_points_ok);
@@ -755,6 +779,7 @@ void vuprs::client::MainWindow::onCommandFinished(quint32 requestId,
         const QString protocol = params.value(QStringLiteral("protocol_version")).toString();
         const QString version = params.value(QStringLiteral("server_version")).toString();
         this->serverInfoLabel_->setText(QStringLiteral("服务器: %1  协议: %2").arg(version, protocol));
+        this->applyInferenceMetadata(params);
         const QJsonObject limits = params.value(QStringLiteral("limits")).toObject();
         if (!limits.isEmpty())
         {
@@ -810,8 +835,6 @@ void vuprs::client::MainWindow::onDataTimer()
             if (this->lastBeamSequence_ >= 0 && frame.sequence > static_cast<quint32>(this->lastBeamSequence_ + 1))
                 this->sequenceDropped_ += static_cast<quint64>(frame.sequence - this->lastBeamSequence_ - 1);
             this->lastBeamSequence_ = frame.sequence;
-            this->faultValid_ = frame.inferenceValid;
-            this->faultIdentity_ = frame.inferenceIdentity;
             ++this->framesSinceStatus_;
         }
         if (!this->playbackActive_)
@@ -844,6 +867,44 @@ void vuprs::client::MainWindow::onDataTimer()
             this->lastHeatmapUpdateMs_ = now;
         }
     }
+
+    QVector<InferenceFrame> inferences;
+    const int inference_count = this->inferenceQueue_->drain(&inferences, 4);
+    if (inference_count > 0)
+    {
+        for (const InferenceFrame &inference : inferences)
+        {
+            if (this->lastInferenceSequence_ >= 0 &&
+                inference.sequence > static_cast<quint64>(this->lastInferenceSequence_ + 1))
+                this->sequenceDropped_ += inference.sequence -
+                                         static_cast<quint64>(this->lastInferenceSequence_ + 1);
+            this->lastInferenceSequence_ = static_cast<qint64>(inference.sequence);
+            this->latestInference_ = inference;
+        }
+        this->hasInference_ = !this->latestInference_.values.isEmpty();
+        if (this->hasInference_)
+        {
+            this->faultValid_ = true;
+            this->faultIdentity_ = inferenceArgMax(this->latestInference_.values);
+            this->inferenceReady_ = true;
+            if (this->inferenceTensorLength_ > 0 &&
+                this->latestInference_.values.size() != this->inferenceTensorLength_ &&
+                this->lastInferenceWarnLength_ != this->latestInference_.values.size())
+            {
+                this->lastInferenceWarnLength_ = this->latestInference_.values.size();
+                this->logMessage(QStringLiteral("推理 tensor 长度 %1 与 ack 声明 %2 不一致")
+                                     .arg(this->latestInference_.values.size())
+                                     .arg(this->inferenceTensorLength_));
+            }
+            this->inferenceBarWidget_->setInferenceFrame(this->latestInference_);
+        }
+        else
+        {
+            this->faultValid_ = false;
+            this->faultIdentity_ = -1;
+            this->inferenceBarWidget_->clear();
+        }
+    }
     this->updateStatusLabels();
 }
 
@@ -855,12 +916,13 @@ void vuprs::client::MainWindow::onStatusTimer()
     this->framesSinceStatus_ = 0;
     this->statusWindowStartMs_ = now;
 
-    const quint64 dropped = this->beamQueue_->dropped() + this->scanQueue_->dropped() + this->sequenceDropped_;
+    const quint64 dropped = this->beamQueue_->dropped() + this->scanQueue_->dropped() +
+                            this->inferenceQueue_->dropped() + this->sequenceDropped_;
     const quint64 rx = this->client_ != nullptr ? this->client_->receivedBytes() : 0;
     this->dataStatusLabel_->setText(
         QStringLiteral("接收: %1 fps | 队列 %2 | 丢帧 %3 | 字节 %4")
             .arg(rate, 0, 'f', 1)
-            .arg(this->beamQueue_->size() + this->scanQueue_->size())
+            .arg(this->beamQueue_->size() + this->scanQueue_->size() + this->inferenceQueue_->size())
             .arg(dropped)
             .arg(rx));
     this->maybeFinishRecording();
@@ -1769,9 +1831,20 @@ void vuprs::client::MainWindow::clearData()
     this->lastHeatmapUpdateMs_ = 0;
     this->lastBeamSequence_ = -1;
     this->lastScanSequence_ = -1;
+    this->lastInferenceSequence_ = -1;
     this->sequenceDropped_ = 0;
     this->faultIdentity_ = -1;
     this->faultValid_ = false;
+    this->latestInference_ = InferenceFrame();
+    this->hasInference_ = false;
+    this->inferenceTensorLength_ = 0;
+    this->lastInferenceWarnLength_ = -1;
+    this->inferenceQueue_->clear();
+    if (this->inferenceBarWidget_ != nullptr)
+    {
+        this->inferenceBarWidget_->clear();
+        this->inferenceBarWidget_->setExpectedLength(0);
+    }
     this->framesSinceStatus_ = 0;
     this->statusWindowStartMs_ = QDateTime::currentMSecsSinceEpoch();
     this->waveformBuffer_.configure(this->fsSpin_->value(), this->config_.historySeconds);
@@ -2015,6 +2088,41 @@ void vuprs::client::MainWindow::applyAlgorithmParameters(const QJsonObject &para
         }
     }
     this->updateParameterMetrics();
+}
+
+void vuprs::client::MainWindow::applyInferenceMetadata(const QJsonObject &params)
+{
+    const QJsonValue length_value = params.value(QStringLiteral("inference_tensor_length"));
+    int length = 0;
+    bool length_ok = false;
+    if (length_value.isString())
+        length = length_value.toString().toInt(&length_ok);
+    else if (length_value.isDouble())
+    {
+        length = length_value.toInt();
+        length_ok = true;
+    }
+    if (length_ok)
+    {
+        length = std::max(0, length);
+        if (length != this->inferenceTensorLength_)
+        {
+            this->inferenceTensorLength_ = length;
+            this->latestInference_ = InferenceFrame();
+            this->hasInference_ = false;
+            this->lastInferenceSequence_ = -1;
+            this->lastInferenceWarnLength_ = -1;
+            if (this->inferenceBarWidget_ != nullptr)
+            {
+                this->inferenceBarWidget_->clear();
+                this->inferenceBarWidget_->setExpectedLength(length);
+            }
+        }
+    }
+
+    const QString format = params.value(QStringLiteral("inference_format")).toString().trimmed().toLower();
+    if (!format.isEmpty() && format != QStringLiteral("q31"))
+        this->logMessage(QStringLiteral("不支持的推理格式: ") + format);
 }
 
 void vuprs::client::MainWindow::setSpinValueExpanding(QDoubleSpinBox *spin,

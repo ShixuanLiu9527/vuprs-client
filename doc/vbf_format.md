@@ -172,6 +172,7 @@ JSON 是一个对象, 用于描述录制上下文. 客户端解析后作为回�
 
 - `sample_count` 可以为 0. 此时 `payload_bytes` 必须为 0, 记录总长仍为 48 字节. 回放时会跳过空帧.
 - `inference_identity` 为有符号 32 位整数. 推理无效时约定为 `-1`, 但判断是否有效应以 `flags` 的 bit 0 为准.
+- 新版服务端协议把推理结果移出 BF_DATA, 改由 `INFERENCE_DATA` 独立推送, 且不写入 `.vbf`. 因此客户端新录制的实时帧通常为 `flags=0`, `inference_identity=-1`; 这两个字段仅为 `.vbf` 格式兼容保留, 旧录制文件仍按原规则读取.
 - `payload_bytes` 是采样数据字节数, 不包含 48 字节记录头. 读取方必须校验 `payload_bytes == sample_count * 4`.
 - `sequence` 由服务端为每个 BF 帧递增. 录制队列丢帧或网络丢帧会造成缺口, 可用于检测丢帧.
 - `timestamp_ns` 是服务端发送时间, 不是文件写入时间.

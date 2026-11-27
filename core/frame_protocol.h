@@ -22,7 +22,8 @@ namespace vuprs
             ControlRequest = 0x0001,
             ControlResponse = 0x0002,
             BfData = 0x0003,
-            ScanData = 0x0004
+            ScanData = 0x0004,
+            InferenceData = 0x0005
         };
 
         struct FrameHeader
@@ -41,8 +42,14 @@ namespace vuprs
             quint32 sampleRateMilliHz = 0;
             quint32 sampleCount = 0;
             quint32 sampleFormat = 1;
-            qint32 inferenceIdentity = -1;
-            quint32 inferenceValid = 0;
+            quint32 reserved[5] = {0, 0, 0, 0, 0};
+        };
+
+        struct InferenceDataHeader
+        {
+            quint32 tensorLength = 0;
+            quint32 dataFormat = 1; /* 1 = int32 Q31 */
+            quint32 reserved[6] = {0, 0, 0, 0, 0, 0};
         };
 
         struct ScanDataHeader
@@ -64,6 +71,10 @@ namespace vuprs
         bool decodeFrameHeader(const QByteArray &bytes, FrameHeader *header, QString *error);
         bool parseBfFrame(const FrameHeader &header, const QByteArray &payload, BeamFrame *frame, QString *error);
         bool parseScanFrame(const FrameHeader &header, const QByteArray &payload, ScanFrame *frame, QString *error);
+        bool parseInferenceFrame(const FrameHeader &header,
+                                 const QByteArray &payload,
+                                 InferenceFrame *frame,
+                                 QString *error);
         bool parseControlResponse(const FrameHeader &header,
                                   const QByteArray &payload,
                                   ControlResponse *response,
