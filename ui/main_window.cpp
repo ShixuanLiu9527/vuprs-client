@@ -189,8 +189,10 @@ void vuprs::client::MainWindow::buildUi()
     auto *connection_buttons = new QHBoxLayout;
     this->connectButton_ = MakeButton(QStringLiteral("连接"));
     this->mockButton_ = MakeButton(QStringLiteral("本地 Mock"));
+    this->boardButton_ = MakeButton(QStringLiteral("直连板卡"));
     connection_buttons->addWidget(this->connectButton_);
     connection_buttons->addWidget(this->mockButton_);
+    connection_buttons->addWidget(this->boardButton_);
     connection_form->addRow(connection_buttons);
     this->connectionLabel_ = new QLabel(QStringLiteral("未连接"));
     this->serverInfoLabel_ = new QLabel(QStringLiteral("协议版本 1"));
@@ -198,9 +200,14 @@ void vuprs::client::MainWindow::buildUi()
     connection_form->addRow(this->connectionLabel_);
     connection_form->addRow(this->serverInfoLabel_);
     SetFieldToolTip(connection_form, this->hostEdit_,
-                    QStringLiteral("服务器 IP 地址或主机名。修改后点击“连接”生效。"));
+                    QStringLiteral("服务器 IP 地址或主机名。DHCP 直连默认 192.168.50.10; 修改后点击“连接”生效。"));
     SetFieldToolTip(connection_form, this->portSpin_,
                     QStringLiteral("服务器 TCP 控制/数据端口，默认 8080。"));
+    this->boardButton_->setToolTip(
+        QStringLiteral("填入 DHCP 直连默认地址 192.168.50.10:8080 并立即连接。"
+                       "Windows 以太网适配器需保持自动获得 IP。"));
+    this->mockButton_->setToolTip(
+        QStringLiteral("填入本地 mock 地址 127.0.0.1:18080 并立即连接。"));
     left_layout->addWidget(connection_group);
 
     /* Algorithm parameters */
@@ -457,6 +464,7 @@ void vuprs::client::MainWindow::buildUi()
 
     connect(this->connectButton_, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
     connect(this->mockButton_, &QPushButton::clicked, this, &MainWindow::onMockClicked);
+    connect(this->boardButton_, &QPushButton::clicked, this, &MainWindow::onBoardConnectClicked);
     connect(this->readParametersButton_, &QPushButton::clicked, this, &MainWindow::onReadParameters);
     connect(this->validateParametersButton_, &QPushButton::clicked, this, &MainWindow::onValidateParameters);
     connect(this->applyParametersButton_, &QPushButton::clicked, this, &MainWindow::onApplyParameters);
@@ -640,6 +648,16 @@ void vuprs::client::MainWindow::onMockClicked()
     this->hostEdit_->setText(QStringLiteral("127.0.0.1"));
     this->portSpin_->setValue(18080);
     this->logMessage(QStringLiteral("已填入本地 mock 地址 127.0.0.1:18080"));
+    this->onConnectClicked();
+}
+
+void vuprs::client::MainWindow::onBoardConnectClicked()
+{
+    this->hostEdit_->setText(defaultServerHost());
+    this->portSpin_->setValue(defaultServerPort());
+    this->logMessage(QStringLiteral("已填入 DHCP 直连板卡地址 %1:%2")
+                         .arg(defaultServerHost())
+                         .arg(defaultServerPort()));
     this->onConnectClicked();
 }
 
@@ -1796,6 +1814,7 @@ void vuprs::client::MainWindow::setConnectedUi(bool connected)
     this->hostEdit_->setEnabled(!connected);
     this->portSpin_->setEnabled(!connected);
     this->mockButton_->setEnabled(!connected);
+    this->boardButton_->setEnabled(!connected);
     const bool controls = connected;
     this->readParametersButton_->setEnabled(controls);
     this->validateParametersButton_->setEnabled(controls);

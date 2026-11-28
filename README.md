@@ -5,6 +5,7 @@ VUPRS 上位机客户端, 使用 Qt 6 Widgets 构建的 Windows 桌面程序. �
 ## 功能概览
 
 - 单 TCP 连接: JSON 控制命令, 服务端主动推送 BF/扫描/推理二进制帧.
+- DHCP 直连: 板卡固定 `192.168.50.10:8080` 并提供 DHCP, Windows 以太网保持自动获得 IP 即可.
 - 算法参数读取和修改, 波束算法切换, 指向修改, 启动, 停止, 复位.
 - BF 波形实时绘制: 自动跟随, 冻结, 滚轮缩放, 拖拽平移, 光标读数, 按像素 min/max 降采样.
 - 空间扫描半球热力图: 斐波那契网格, 反距离加权插值, 色标, 悬停读数, 最大能量点, 波束指向标记.
@@ -170,12 +171,17 @@ ctest --test-dir build --output-on-failure
 ## 运行
 
 ```bash
-./build/vuprs_client.exe
+# DHCP direct link: Windows Ethernet on automatic DHCP, board at 192.168.50.10:8080
+./build/vuprs_client.exe --connect --host 192.168.50.10 --port 8080
+
+# Local mock
 ./build/vuprs_client.exe --connect --host 127.0.0.1 --port 18080
+
+# Playback
 ./build/vuprs_client.exe --playback recordings/task1234_id1.vbf
 ```
 
-命令行参数, 界面操作和无板卡联调步骤见 [doc/usage.md](doc/usage.md).
+GUI default is `192.168.50.10:8080`. The board runs a dnsmasq DHCP server and assigns the PC an address in `192.168.50.100-200`; the client itself still connects to the fixed board address. See [doc/usage.md](doc/usage.md) for connection details, command-line parameters and mock setup.
 
 ## 测试
 

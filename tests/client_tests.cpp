@@ -409,6 +409,8 @@ private slots:
         QVERIFY2(error.isEmpty(), qPrintable(error));
         QVERIFY(created_new);
         QVERIFY(QFile::exists(new_path));
+        QCOMPARE(created_config.host, vuprs::client::defaultServerHost());
+        QCOMPARE(created_config.port, vuprs::client::defaultServerPort());
         QVERIFY(created_config.historySeconds >= 5);
         QVERIFY(created_config.defaultWindowSeconds >= 1);
     }

@@ -117,7 +117,7 @@ JSON 是一个对象, 用于描述录制上下文. 客户端解析后作为回�
   "protocol_version": 1,
   "client_version": "0.1.0",
   "sample_rate_millihz": 10000000,
-  "server": "192.168.1.100:8080",
+  "server": "192.168.50.10:8080",
   "start_utc": "2023-11-14T22:13:20.000Z",
   "task_id": "0000",
   "recording_index": 1,

@@ -8,10 +8,14 @@ namespace vuprs
 {
     namespace client
     {
+        /** Direct-link DHCP mode: the board keeps this address and serves DHCP. */
+        inline QString defaultServerHost() { return QStringLiteral("192.168.50.10"); }
+        inline quint16 defaultServerPort() { return 8080; }
+
         struct AppConfig
         {
-            QString host = QStringLiteral("192.168.1.100");
-            quint16 port = 8080;
+            QString host = defaultServerHost();
+            quint16 port = defaultServerPort();
             int connectTimeoutMs = 3000;
             int commandTimeoutMs = 5000;
             int historySeconds = 60;

@@ -55,7 +55,8 @@ vuprs::client::SettingsDialog::SettingsDialog(const AppConfig &config, QWidget *
     server_form->addRow(QStringLiteral("连接超时"), this->connectTimeoutSpin_);
     server_form->addRow(QStringLiteral("命令超时"), this->commandTimeoutSpin_);
     SetFieldToolTip(server_form, this->hostEdit_,
-                    QStringLiteral("客户端默认连接的服务器 IP 或主机名。"));
+                    QStringLiteral("客户端默认连接的服务器 IP 或主机名。"
+                                   "DHCP 直连默认 192.168.50.10。"));
     SetFieldToolTip(server_form, this->portSpin_,
                     QStringLiteral("服务器 TCP 端口，默认 8080。"));
     SetFieldToolTip(server_form, this->connectTimeoutSpin_,

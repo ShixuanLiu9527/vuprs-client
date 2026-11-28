@@ -51,6 +51,7 @@ namespace vuprs
         private slots:
             void onConnectClicked();
             void onMockClicked();
+            void onBoardConnectClicked();
             void onConnectionChanged(bool connected, const QString &detail);
             void onCommandFinished(quint32 requestId,
                                    const QString &cmd,
@@ -183,6 +184,7 @@ namespace vuprs
             QSpinBox *portSpin_ = nullptr;
             QPushButton *connectButton_ = nullptr;
             QPushButton *mockButton_ = nullptr;
+            QPushButton *boardButton_ = nullptr;
             QLabel *connectionLabel_ = nullptr;
             QLabel *serverInfoLabel_ = nullptr;
 

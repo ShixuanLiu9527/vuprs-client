@@ -74,9 +74,9 @@ namespace
     {
         config.host = config.host.trimmed();
         if (config.host.isEmpty())
-            config.host = QStringLiteral("192.168.1.100");
+            config.host = vuprs::client::defaultServerHost();
         if (config.port == 0)
-            config.port = 8080;
+            config.port = vuprs::client::defaultServerPort();
         config.connectTimeoutMs = qBound(500, config.connectTimeoutMs, 30000);
         config.commandTimeoutMs = qBound(500, config.commandTimeoutMs, 30000);
         config.historySeconds = qBound(5, config.historySeconds, 300);
